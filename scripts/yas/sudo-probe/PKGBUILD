@@ -1,0 +1,29 @@
+# Sonda para la demo de yas: simula un PKGBUILD malicioso (o mal escrito)
+# que intenta obtener root durante build() reutilizando la credencial de
+# sudo que haya quedado en caché en la terminal.
+#
+#   sudo -v && yay -B scripts/yas/sudo-probe           -> obtiene root (uid 0)
+#   sudo -v && yas --privsep -B scripts/yas/sudo-probe -> bloqueado (no_new_privs)
+#
+# build() falla siempre a propósito: la sonda nunca se instala.
+pkgname=yas-sudo-probe
+pkgver=1
+pkgrel=1
+pkgdesc="Sonda: intenta usar sudo desde build()"
+arch=(any)
+license=(GPL-3.0-or-later)
+
+build() {
+  echo "==> [sonda] NoNewPrivs del proceso de build: $(awk '/NoNewPrivs/{print $2}' /proc/self/status)"
+  if uid=$(sudo -n id -u 2>&1); then
+    echo "==> [sonda] !!! el PKGBUILD obtuvo root sin pedir contraseña (uid=$uid)"
+  else
+    echo "==> [sonda] OK: sudo bloqueado dentro de build(): $uid"
+  fi
+  echo "==> [sonda] fallo intencional para no instalar nada"
+  return 1
+}
+
+package() {
+  :
+}

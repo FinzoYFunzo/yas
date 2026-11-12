@@ -54,6 +54,7 @@ type Configuration struct {
 	MaxConcurrentDownloads int    `json:"maxconcurrentdownloads" lua:"max_concurrent_downloads"`
 	BottomUp               bool   `json:"bottomup" lua:"bottom_up"`
 	SudoLoop               bool   `json:"sudoloop" lua:"sudo_loop"`
+	PrivSep                bool   `json:"privsep" lua:"privsep"`
 	Devel                  bool   `json:"devel" lua:"devel"`
 	CleanAfter             bool   `json:"cleanAfter" lua:"clean_after"`
 	KeepSrc                bool   `json:"keepSrc" lua:"keep_src"`
@@ -214,6 +215,7 @@ func DefaultConfig(version string) *Configuration {
 		SortBy:                 "",
 		SearchBy:               "name-desc",
 		SudoLoop:               false,
+		PrivSep:                false,
 		GitBin:                 "git",
 		GpgBin:                 "gpg",
 		SudoBin:                "sudo",

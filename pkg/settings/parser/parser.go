@@ -416,6 +416,8 @@ func isArg(arg string) bool {
 	case "sudoflags":
 	case "requestsplitn":
 	case "sudoloop":
+	case "privsep":
+	case "noprivsep":
 	case "provides":
 	case "pgpfetch":
 	case "cleanmenu":

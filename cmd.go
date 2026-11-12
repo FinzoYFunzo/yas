@@ -215,6 +215,7 @@ func usage(logger *text.Logger) {
 		{"--sudo <file>", gotext.Get("sudo command to use")},
 		{"--sudoflags <flags>", gotext.Get("Pass arguments to sudo")},
 		{"--sudoloop", gotext.Get("Loop sudo calls in the background to avoid timeout")},
+		{"--privsep", gotext.Get("Run pacman through a privileged broker: one password prompt, no reusable sudo credential")},
 	})
 }
 
@@ -244,8 +245,20 @@ func handleCmd(ctx context.Context, run *runtime.Runtime,
 		return handleHelp(ctx, run, cmdArgs)
 	}
 
-	if run.Cfg.SudoLoop && cmdArgs.NeedRoot(run.Cfg.Mode) {
-		run.CmdBuilder.SudoLoop()
+	if cmdArgs.NeedRoot(run.Cfg.Mode) {
+		switch {
+		case run.Cfg.PrivSep:
+			// Ask for the password now, while the user is at the terminal.
+			if err := run.CmdBuilder.StartPrivSep(); err != nil {
+				return err
+			}
+
+			defer run.CmdBuilder.StopPrivSep()
+		case run.Cfg.SudoLoop:
+			if err := run.CmdBuilder.SudoLoop(); err != nil {
+				return err
+			}
+		}
 	}
 
 	switch cmdArgs.Op {

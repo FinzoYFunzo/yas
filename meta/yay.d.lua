@@ -48,6 +48,7 @@
 ---@field max_concurrent_downloads integer Parallel PKGBUILD source downloads; 0 uses CPU count.
 ---@field bottom_up boolean Show AUR packages before repo packages in mixed results.
 ---@field sudo_loop boolean Keep sudo session alive in the background during long builds.
+---@field privsep boolean Run pacman through a privileged broker (one password prompt, no reusable sudo credential).
 ---@field devel boolean Check development/VCS packages on sysupgrade.
 ---@field clean_after boolean Remove untracked files after install.
 ---@field keep_src boolean Keep pkg/ and src/ after successful builds.

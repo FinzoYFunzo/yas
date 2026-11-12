@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"os/signal"
 	"runtime/debug"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/leonelquinteros/gotext"
 
 	"github.com/Jguer/yay/v13/pkg/db/ialpm"
+	"github.com/Jguer/yay/v13/pkg/privsep"
 	"github.com/Jguer/yay/v13/pkg/runtime"
 	"github.com/Jguer/yay/v13/pkg/settings"
 	"github.com/Jguer/yay/v13/pkg/settings/lua"
@@ -47,6 +47,13 @@ func newSignalContext() (context.Context, context.CancelFunc) {
 }
 
 func main() {
+	// yas: the same binary acts as the privileged broker when launched
+	// through sudo with this hidden argument. Handled before reading any
+	// user configuration.
+	if privsep.IsBrokerInvocation(os.Args) {
+		os.Exit(privsep.BrokerMain(os.Args))
+	}
+
 	fallbackLog := text.NewLogger(os.Stdout, os.Stderr, os.Stdin, false, "fallback")
 	var (
 		err       error
@@ -163,9 +170,10 @@ func main() {
 			fallbackLog.Errorln(str)
 		}
 
-		exitError := &exec.ExitError{}
+		// mirror pacman exit code when applicable (*exec.ExitError or
+		// *privsep.ExitError when pacman ran through the broker)
+		var exitError interface{ ExitCode() int }
 		if errors.As(err, &exitError) {
-			// mirror pacman exit code when applicable
 			ret = exitError.ExitCode()
 			return
 		}

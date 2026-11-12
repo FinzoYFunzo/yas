@@ -151,6 +151,10 @@ func (c *Configuration) handleOption(option, value string) bool {
 		}
 	case "sudoloop":
 		c.SudoLoop = boolValue
+	case "privsep":
+		c.PrivSep = boolValue
+	case "noprivsep":
+		c.PrivSep = false
 	case "provides":
 		c.Provides = boolValue
 	case "pgpfetch":

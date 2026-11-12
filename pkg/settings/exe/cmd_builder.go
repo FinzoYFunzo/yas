@@ -2,6 +2,7 @@ package exe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,12 +10,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/leonelquinteros/gotext"
 
+	"github.com/Jguer/yay/v13/pkg/privsep"
 	"github.com/Jguer/yay/v13/pkg/settings"
 	"github.com/Jguer/yay/v13/pkg/settings/parser"
 	"github.com/Jguer/yay/v13/pkg/text"
@@ -40,7 +43,9 @@ type ICmdBuilder interface {
 	BuildPacmanCmd(ctx context.Context, args *parser.Arguments, mode parser.TargetMode, noConfirm bool) *exec.Cmd
 	AddMakepkgFlag(string)
 	GetKeepSrc() bool
-	SudoLoop()
+	SudoLoop() error
+	StartPrivSep() error
+	StopPrivSep()
 }
 
 type CmdBuilder struct {
@@ -58,8 +63,14 @@ type CmdBuilder struct {
 	PacmanConfigPath string
 	PacmanDBPath     string
 	KeepSrc          bool
+	PrivSepEnabled   bool
 	Runner           Runner
 	Log              *text.Logger
+
+	privsepMu      sync.Mutex
+	privsep        *privsep.Client
+	privsepFailed  bool
+	privsepPending map[*exec.Cmd]privsep.Request
 }
 
 func NewCmdBuilder(cfg *settings.Configuration, runner Runner, logger *text.Logger, dbPath string) *CmdBuilder {
@@ -78,6 +89,7 @@ func NewCmdBuilder(cfg *settings.Configuration, runner Runner, logger *text.Logg
 		PacmanConfigPath: cfg.PacmanConf,
 		PacmanDBPath:     dbPath,
 		KeepSrc:          cfg.KeepSrc,
+		PrivSepEnabled:   cfg.PrivSep,
 		Runner:           runner,
 		Log:              logger,
 	}
@@ -154,8 +166,31 @@ func (c *CmdBuilder) BuildMakepkgCmd(ctx context.Context, dir string, extraArgs 
 	cmd.Dir = dir
 
 	cmd = c.deElevateCommand(ctx, cmd)
+	cmd = c.noNewPrivsCommand(ctx, cmd)
 
 	return cmd
+}
+
+// noNewPrivsCommand runs untrusted build code (makepkg + PKGBUILD) with the
+// kernel's no_new_privs flag when privilege separation is on: setuid
+// binaries such as sudo can then never grant root to a PKGBUILD. Go's
+// SysProcAttr has no field for it, so setpriv(1) from util-linux is used.
+func (c *CmdBuilder) noNewPrivsCommand(ctx context.Context, cmd *exec.Cmd) *exec.Cmd {
+	if !c.PrivSepEnabled || os.Geteuid() == 0 {
+		return cmd
+	}
+
+	setpriv, err := exec.LookPath("setpriv")
+	if err != nil {
+		c.Log.Warnln(gotext.Get("setpriv not found: building without no_new_privs"))
+		return cmd
+	}
+
+	wrapped := exec.CommandContext(ctx, setpriv, append([]string{"--no-new-privs", "--"}, cmd.Args...)...)
+	wrapped.Dir = cmd.Dir
+	wrapped.Env = cmd.Env
+
+	return wrapped
 }
 
 // deElevateCommand, `systemd-run` code based on pikaur.
@@ -241,7 +276,10 @@ func (c *CmdBuilder) BuildPacmanCmd(ctx context.Context, args *parser.Arguments,
 		c.waitLock(c.PacmanDBPath)
 
 		if os.Geteuid() != 0 {
-			return c.buildPrivilegeElevatorCommand(ctx, argArr)
+			cmd := c.buildPrivilegeElevatorCommand(ctx, argArr)
+			c.routeThroughBroker(cmd, args, noConfirm)
+
+			return cmd
 		}
 	}
 
@@ -269,35 +307,203 @@ func (c *CmdBuilder) waitLock(dbPath string) {
 	}
 }
 
-func (c *CmdBuilder) SudoLoop() {
-	c.updateSudo()
+// SudoLoop authenticates once and then keeps the sudo timestamp alive in the
+// background. It fails safe: the old implementation retried `sudo -v` forever
+// on failure, and every unanswered prompt was counted by pam_faillock until
+// the account got locked. Now there is a single interactive attempt, and the
+// background refresh uses `sudo -n`, which never prompts and therefore never
+// produces a failed PAM authentication.
+func (c *CmdBuilder) SudoLoop() error {
+	if err := c.Show(exec.CommandContext(context.Background(), c.SudoBin, "-v")); err != nil {
+		return fmt.Errorf("%s: %w", gotext.Get("sudo authentication failed"), err)
+	}
+
+	if err := c.refreshSudo(); err != nil {
+		// e.g. timestamp_timeout=0: there is no cache to keep alive.
+		c.Log.Warnln(gotext.Get("sudo does not cache credentials (timestamp_timeout=0?): sudoloop disabled, consider --privsep"))
+		return nil
+	}
 
 	go c.sudoLoopBackground()
+
+	return nil
 }
 
 func (c *CmdBuilder) sudoLoopBackground() {
 	for {
-		c.updateSudo()
 		time.Sleep(SudoLoopDuration * time.Second)
-	}
-}
 
-func (c *CmdBuilder) updateSudo() {
-	for {
-		err := c.Show(exec.CommandContext(context.Background(), c.SudoBin, "-v"))
-		if err != nil {
-			c.Log.Errorln(err)
-		} else {
-			break
+		if err := c.refreshSudo(); err != nil {
+			c.Log.Warnln(gotext.Get("sudo credentials expired: sudoloop stopped"))
+			return
 		}
 	}
 }
 
+// refreshSudo extends the sudo timestamp without ever prompting.
+func (c *CmdBuilder) refreshSudo() error {
+	_, _, err := c.Runner.Capture(exec.CommandContext(context.Background(), c.SudoBin, "-n", "-v"))
+	return err
+}
+
+// StartPrivSep launches the privileged broker (yas). It is the only point
+// where the user is asked for a password during the run. A no-op when
+// privilege separation is disabled, already running, or yay runs as root.
+func (c *CmdBuilder) StartPrivSep() error {
+	c.privsepMu.Lock()
+	defer c.privsepMu.Unlock()
+
+	return c.startPrivSepLocked()
+}
+
+func (c *CmdBuilder) startPrivSepLocked() error {
+	if !c.PrivSepEnabled || c.privsep != nil || os.Geteuid() == 0 {
+		return nil
+	}
+
+	if filepath.Base(c.SudoBin) == "su" {
+		return errors.New(gotext.Get("--privsep is not supported with su; use sudo, doas or run0"))
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+
+	client, err := privsep.Start(privsep.StartOptions{
+		Executable: exe,
+		PacmanBin:  c.PacmanBin,
+		PacmanConf: c.PacmanConfigPath,
+		Elevate: func(argv []string) *exec.Cmd {
+			return c.buildPrivilegeElevatorCommand(context.Background(), argv)
+		},
+		ClearCredentials: c.clearElevatorCredentials,
+	})
+	if err != nil {
+		c.privsepFailed = true
+		return err
+	}
+
+	c.privsep = client
+	c.privsepPending = map[*exec.Cmd]privsep.Request{}
+	c.Log.Debugln("privileged broker started, pid", client.BrokerPID)
+
+	return nil
+}
+
+// StopPrivSep closes the session; the broker exits when it sees EOF.
+func (c *CmdBuilder) StopPrivSep() {
+	c.privsepMu.Lock()
+	defer c.privsepMu.Unlock()
+
+	if c.privsep != nil {
+		_ = c.privsep.Close()
+		c.privsep = nil
+	}
+}
+
+// clearElevatorCredentials drops any cached credential right after the
+// broker started, so nothing else on this terminal (e.g. a PKGBUILD) can
+// reuse it.
+func (c *CmdBuilder) clearElevatorCredentials() {
+	var args []string
+
+	switch filepath.Base(c.SudoBin) {
+	case "sudo":
+		args = []string{"-k"}
+	case "doas":
+		args = []string{"-L"}
+	default:
+		return
+	}
+
+	_, _, _ = c.Runner.Capture(exec.CommandContext(context.Background(), c.SudoBin, args...))
+}
+
+// routeThroughBroker registers cmd (the classic `sudo pacman ...` command) to
+// be executed by the broker instead. If the broker is unavailable the
+// classic command is left untouched as a fallback.
+func (c *CmdBuilder) routeThroughBroker(cmd *exec.Cmd, args *parser.Arguments, noConfirm bool) {
+	if !c.PrivSepEnabled {
+		return
+	}
+
+	c.privsepMu.Lock()
+	defer c.privsepMu.Unlock()
+
+	if c.privsep == nil && !c.privsepFailed {
+		if err := c.startPrivSepLocked(); err != nil {
+			c.Log.Warnln(gotext.Get("privileged broker unavailable, falling back to %s:", c.SudoBin), err)
+		}
+	}
+
+	if c.privsep == nil {
+		return
+	}
+
+	c.privsepPending[cmd] = brokerRequest(args, noConfirm)
+}
+
+// brokerRequest turns yay's parsed pacman arguments into a structured
+// request. The broker re-validates every field; nothing here is trusted.
+func brokerRequest(args *parser.Arguments, noConfirm bool) privsep.Request {
+	req := privsep.Request{Op: args.Op}
+
+	for name, opt := range args.Options {
+		if name == "--" {
+			continue
+		}
+
+		for _, value := range opt.Args {
+			req.Flags = append(req.Flags, privsep.Flag{Name: name, Value: value})
+		}
+	}
+
+	if noConfirm {
+		req.Flags = append(req.Flags, privsep.Flag{Name: "noconfirm"})
+	}
+
+	for _, target := range args.Targets {
+		// The broker runs in "/", so local package files must be absolute.
+		if args.Op == "U" || args.Op == "upgrade" {
+			if abs, err := filepath.Abs(target); err == nil && !strings.Contains(target, "://") {
+				target = abs
+			}
+		}
+
+		req.Targets = append(req.Targets, target)
+	}
+
+	return req
+}
+
+func (c *CmdBuilder) takeBrokerRequest(cmd *exec.Cmd) (privsep.Request, bool) {
+	c.privsepMu.Lock()
+	defer c.privsepMu.Unlock()
+
+	if c.privsep == nil {
+		return privsep.Request{}, false
+	}
+
+	req, ok := c.privsepPending[cmd]
+	delete(c.privsepPending, cmd)
+
+	return req, ok
+}
+
 func (c *CmdBuilder) Show(cmd *exec.Cmd) error {
+	if req, ok := c.takeBrokerRequest(cmd); ok {
+		c.Log.Debugln("running through privileged broker:", cmd.String())
+		return c.privsep.Run(req)
+	}
+
 	return c.Runner.Show(cmd)
 }
 
 func (c *CmdBuilder) Capture(cmd *exec.Cmd) (stdout, stderr string, err error) {
+	// Captured privileged commands keep the classic path.
+	_, _ = c.takeBrokerRequest(cmd)
+
 	return c.Runner.Capture(cmd)
 }
 

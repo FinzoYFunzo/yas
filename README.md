@@ -1,3 +1,8 @@
+> **yas — Yet another Sudo.** Este fork agrega separación de privilegios
+> (`--privsep`): una sola autenticación por ejecución, pacman ejecutado por un
+> broker privilegiado con lista blanca y sin credencial de sudo reutilizable
+> por los PKGBUILD. Ver [doc/yas.md](doc/yas.md).
+
 [![yay](https://img.shields.io/aur/version/yay?color=1793d1&label=yay&logo=arch-linux&style=for-the-badge)](https://aur.archlinux.org/packages/yay/)
 [![yay-bin](https://img.shields.io/aur/version/yay-bin?color=1793d1&label=yay-bin&logo=arch-linux&style=for-the-badge)](https://aur.archlinux.org/packages/yay-bin/)
 [![yay-git](https://img.shields.io/aur/version/yay-git?color=1793d1&label=yay-git&logo=arch-linux&style=for-the-badge)](https://aur.archlinux.org/packages/yay-git/)

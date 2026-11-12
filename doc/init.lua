@@ -36,6 +36,7 @@ yay.opt.max_concurrent_downloads = 1
 
 yay.opt.bottom_up = true
 yay.opt.sudo_loop = false
+yay.opt.privsep = false
 yay.opt.devel = false
 yay.opt.clean_after = false
 yay.opt.keep_src = false

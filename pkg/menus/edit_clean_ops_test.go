@@ -92,7 +92,9 @@ func (f *fakeCmdBuilder) BuildGPGCmd(ctx context.Context, extraArgs ...string) *
 
 func (f *fakeCmdBuilder) AddMakepkgFlag(flag string) {}
 func (f *fakeCmdBuilder) GetKeepSrc() bool           { return false }
-func (f *fakeCmdBuilder) SudoLoop()                  {}
+func (f *fakeCmdBuilder) SudoLoop() error            { return nil }
+func (f *fakeCmdBuilder) StartPrivSep() error        { return nil }
+func (f *fakeCmdBuilder) StopPrivSep()               {}
 
 func (f *fakeCmdBuilder) Capture(cmd *exec.Cmd) (string, string, error) {
 	return "", "", nil

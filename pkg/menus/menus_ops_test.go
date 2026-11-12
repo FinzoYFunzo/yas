@@ -113,7 +113,9 @@ func (f *fakeMenusCmdBuilder) AddMakepkgFlag(flag string) {}
 
 func (f *fakeMenusCmdBuilder) GetKeepSrc() bool { return false }
 
-func (f *fakeMenusCmdBuilder) SudoLoop() {}
+func (f *fakeMenusCmdBuilder) SudoLoop() error     { return nil }
+func (f *fakeMenusCmdBuilder) StartPrivSep() error { return nil }
+func (f *fakeMenusCmdBuilder) StopPrivSep()        {}
 
 func (f *fakeMenusCmdBuilder) Capture(cmd *exec.Cmd) (string, string, error) {
 	f.captureCnt++

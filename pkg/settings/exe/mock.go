@@ -85,7 +85,15 @@ func (m *MockBuilder) BuildPacmanCmd(ctx context.Context, args *parser.Arguments
 func (m *MockBuilder) SetPacmanDBPath(path string) {
 }
 
-func (m *MockBuilder) SudoLoop() {
+func (m *MockBuilder) SudoLoop() error {
+	return nil
+}
+
+func (m *MockBuilder) StartPrivSep() error {
+	return nil
+}
+
+func (m *MockBuilder) StopPrivSep() {
 }
 
 func (m *MockBuilder) Capture(cmd *exec.Cmd) (stdout, stderr string, err error) {

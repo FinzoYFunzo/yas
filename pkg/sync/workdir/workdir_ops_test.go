@@ -100,7 +100,9 @@ func (f *fakeWorkdirCmdBuilder) BuildGPGCmd(ctx context.Context, extraArgs ...st
 
 func (f *fakeWorkdirCmdBuilder) AddMakepkgFlag(string) {}
 func (f *fakeWorkdirCmdBuilder) GetKeepSrc() bool      { return false }
-func (f *fakeWorkdirCmdBuilder) SudoLoop()             {}
+func (f *fakeWorkdirCmdBuilder) SudoLoop() error       { return nil }
+func (f *fakeWorkdirCmdBuilder) StartPrivSep() error   { return nil }
+func (f *fakeWorkdirCmdBuilder) StopPrivSep()          {}
 
 func (f *fakeWorkdirCmdBuilder) Capture(cmd *exec.Cmd) (string, string, error) {
 	f.captureCalls = append(f.captureCalls, cmd.String())
